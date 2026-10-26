@@ -52,6 +52,7 @@ Pinch / +/- to zoom, double-tap resets zoom.
 
 ## Extras
 
+- **Drop-off flag and the game's GPS** (v1.12.0, with the Windows app v1.9.0): job routes lead to the company yard's entrance and the flag stands on the drop-off spot inside, joined by a dashed line, with the arrival announced there. When there is no job, the app offers to navigate to where the game's own GPS is set (read from your newest save by the Windows app; Settings switch). Routes avoid closed border crossings, start on the road after a ferry, and ferry crossings show as dashed blue lines. The drop-off spots and the game's GPS need the Windows app on the PC.
 - **App icon** (v1.11.2): the Android app has its own launcher icon (the ETS2 GPS truck and pin artwork) instead of the system compass. The Windows app (v1.7.2) and the web version (favicon, home-screen icon) use the same artwork.
 - **Update check** (v1.11.1): the Android app looks for a newer release on GitHub about once a day (**Settings > Updates**: open the download page, skip a version, check now, or switch it off). Nothing is downloaded or installed; it only opens the release page. The Windows app and the web version have the same notice.
 - **Better roundabouts and exits** (v1.11.0): roundabouts built from several pieces or not flagged by the map builder are announced as roundabouts; looping ramps say "take the exit on the right / left"; delivered or cancelled jobs end the route; prompts are not repeated after a recalculation and nothing is recalculated inside a yard.

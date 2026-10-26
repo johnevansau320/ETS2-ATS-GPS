@@ -113,6 +113,8 @@ class MainActivity : Activity() {
     private var offAnnounced = false
     private val NEAR_DEST_M = 120.0 // map metres: this close to the destination the app stops recalculating
     private var destIsJob = false; private var endHinted = false; private var stillSinceMs = 0L
+    private val AT_FLAG_M = 20.0 // map metres: this close to the drop-off flag counts as arrived
+    private var jobFlag: FloatArray? = null // the drop-off spot in the company yard (where the game shows its delivery flag), when known
     private var resumeSet = false
     private var resumeX = 0f
     private var resumeZ = 0f
@@ -134,6 +136,9 @@ class MainActivity : Activity() {
     private var showLanes: Boolean // the lane guidance panel can be switched off in Settings
         get() = prefs.getBoolean("lanes", true)
         set(v) { prefs.edit().putBoolean("lanes", v).apply() }
+    private var followGameGps: Boolean // offer to route to the game's GPS destination when there is no job
+        get() = prefs.getBoolean("game_gps", true)
+        set(v) { prefs.edit().putBoolean("game_gps", v).apply() }
     // ---- update check: about once a day, nothing is downloaded; Settings offers the release page
     private var checkUpdates: Boolean
         get() = prefs.getBoolean("updates", true)
@@ -569,6 +574,21 @@ class MainActivity : Activity() {
 
     private fun mapFile() = File(filesDir, "etsmap.bin")
     private fun assetsFile() = File(filesDir, "etsassets.bin")
+    private fun dropsFile() = File(filesDir, "etsmap.drops.json")
+
+    /** Best effort: the Windows app serves the companies' drop-off spots next to the map (the delivery flag goes there). */
+    private fun downloadDrops(h: String): Boolean {
+        try {
+            val c = URL("http://$h:31378/drops.json").openConnection() as HttpURLConnection
+            c.connectTimeout = 4000
+            c.readTimeout = 20000
+            if (c.responseCode != 200) { c.disconnect(); return false }
+            val text = c.inputStream.use { it.readBytes() }
+            c.disconnect()
+            dropsFile().writeBytes(text)
+            return true
+        } catch (_: Throwable) { return false }
+    }
 
     /** Logos and flags are optional (older PCs / companions do not have them). */
     private fun loadAssetsAsync() {
@@ -603,6 +623,10 @@ class MainActivity : Activity() {
         bg.execute {
             try {
                 val m = MapData.load(f)
+                // drop-off spots: maps downloaded before they existed fetch them once from the PC
+                val h = host.substringBefore(":")
+                if (!dropsFile().exists() && h.isNotEmpty()) downloadDrops(h)
+                if (dropsFile().exists()) m.drops = CompanyDrops.parse(dropsFile().readText())
                 val r = Router(m)
                 r.mode = routeMode
                 r.avoidFerries = avoidFerries
@@ -661,6 +685,7 @@ class MainActivity : Activity() {
                     tmp.renameTo(mapFile())
                 }
                 downloadAssets(h)
+                downloadDrops(h)
                 ui.post { downloading = false; loadMapAsync() }
             } catch (t: Throwable) {
                 tmp.delete()
@@ -693,7 +718,7 @@ class MainActivity : Activity() {
         } else limitText.visibility = View.INVISIBLE
         trackTrip(s, now)
         if (tripScreen.visibility == View.VISIBLE) updateTrip()
-        if (s.connected) { updateAltitude(s); checkHill(s); checkNewJob(s); checkJobEvents(s); checkAlerts(s); updatePlace(now); navTick() }
+        if (s.connected) { updateAltitude(s); checkHill(s); checkNewJob(s); checkJobEvents(s); checkAlerts(s); updatePlace(now); navTick(); checkGameGps(now) }
     }
 
     // ------------------------------------------------------------------------- navigation --
@@ -726,7 +751,7 @@ class MainActivity : Activity() {
         }
         if (st.arrived && destIsJob && holdAtRouteEnd(n)) return
         if (st.arrived) {
-            if (destIsJob) voice.say("You have arrived at $destName")
+            if (destIsJob) voice.say(if (jobFlag != null) "You have arrived at the drop off point" else "You have arrived at $destName")
             mapView.flagOn = false
             infoText.text = "Arrived at $destName"
             banner.setMessage("You have arrived")
@@ -761,6 +786,17 @@ class MainActivity : Activity() {
     private fun holdAtRouteEnd(n: Navigator): Boolean {
         val t = truck ?: return false
         if (t.destCityId.isEmpty()) return false // job delivered or cancelled: arrived
+        jobFlag?.let { f ->
+            // the drop-off spot is known: carry on to the flag (a straight line across the yard) and arrive there
+            val d = Math.hypot((motion.x - f[0]).toDouble(), (motion.z - f[1]).toDouble())
+            if (d < AT_FLAG_M) return false
+            if (!endHinted) { endHinted = true; voice.say("The mapped route ends here. Follow the flag to the drop off point.") }
+            banner.setMessage("Mapped route ends here - follow the flag")
+            setLaneUi(null)
+            infoText.text = "$destName\nDrop-off point: ${n.shortDistance(d.toFloat())} in a straight line"
+            offAnnounced = false
+            return true
+        }
         val navKm = t.detail?.navDistanceKm ?: 0f
         val gameM = if (navKm > 0.001f) navKm * 1000f else Math.hypot((motion.x - destX).toDouble(), (motion.z - destZ).toDouble()).toFloat() * simScale
         val now = SystemClock.elapsedRealtime()
@@ -815,6 +851,7 @@ class MainActivity : Activity() {
         if (!hasDest || routing.get() || now - lastReroute < 4000) return
         // inside the destination's yard or compound there are no mapped roads: do not recalculate (or keep saying so) there
         if (Math.hypot((motion.x - destX).toDouble(), (motion.z - destZ).toDouble()) < NEAR_DEST_M) return
+        jobFlag?.let { f -> if (Math.hypot((motion.x - f[0]).toDouble(), (motion.z - f[1]).toDouble()) < NEAR_DEST_M) return }
         // only recalculate once the truck is back on a mapped road (not while manoeuvring in a yard or compound)
         val rt = router
         if (rt != null && rt.snap(motion.x, motion.z, motion.bearing, 35f) == null) return
@@ -824,7 +861,7 @@ class MainActivity : Activity() {
     }
 
     private fun cancelRoute() {
-        resumeSet = false; destIsPoi = false; destIsJob = false; mapView.flagOn = false
+        resumeSet = false; destIsPoi = false; destIsJob = false; jobFlag = null; mapView.flagOn = false
         waypoints.clear(); resumeStops.clear(); afterM = 0f; afterS = 0f; syncStops()
         nav?.clear()
         routeEtaGameMin = -1f
@@ -837,7 +874,8 @@ class MainActivity : Activity() {
         infoText.text = "No route"
     }
 
-    private fun computeRoute(x: Float, z: Float, name: String, announce: Boolean, isPoi: Boolean = false, reroute: Boolean = false, keepStops: Boolean = false, isJob: Boolean = false) {
+    private fun computeRoute(x: Float, z: Float, name: String, announce: Boolean, isPoi: Boolean = false, reroute: Boolean = false, keepStops: Boolean = false, isJob: Boolean = false,
+                             flag: FloatArray? = null) {
         val r = router; val n = nav; val m = map
         if (r == null || n == null || m == null) { toast("Map not loaded yet"); return }
         if (truck?.connected != true) { toast("Start the game first - no truck position yet"); return }
@@ -854,6 +892,7 @@ class MainActivity : Activity() {
                 if (!keepStops) waypoints.clear()
             }
             destIsPoi = isPoi; destIsJob = isJob; endHinted = false; stillSinceMs = 0L
+            jobFlag = if (isJob) flag else null
         }
         destX = x; destZ = z; destName = name; hasDest = true
         if (!reroute && !isPoi && !keepStops) startLabel = place.removePrefix("Near ").ifEmpty { "Start" }
@@ -903,7 +942,9 @@ class MainActivity : Activity() {
                 ui.post {
                     n.distScale = distScale
                     n.arriveWord = if (legIsStop) "your waypoint" else if (destIsJob) "the destination area" else "your destination"
-                    mapView.flagOn = true; mapView.flagX = x; mapView.flagZ = z
+                    val fl = jobFlag
+                    mapView.flagOn = true; mapView.flagLink = fl != null
+                    mapView.flagX = fl?.get(0) ?: x; mapView.flagZ = fl?.get(1) ?: z
                     afterM = am; afterS = asec
                     n.setRoute(res, remaining, reroute)
                     mapView.routePts = pts; mapView.routeLift = lift; mapView.routeEdgePt = starts; mapView.routeIdx = 0
@@ -935,7 +976,10 @@ class MainActivity : Activity() {
         val co = m.findCompany(t.destCityId, t.destCompanyId)
         if (co != null) {
             val label = if (t.destCompany.isNotEmpty()) "${t.destCompany}, ${t.destCity}" else t.destCity
-            computeRoute(co.x, co.z, label, announce = true, isJob = true)
+            // the route leads to the yard entrance (where the game's own route reaches the company); the flag stands at the drop-off spot inside
+            val yard = m.findDrops(t.destCityId, t.destCompanyId)
+            val spot = yard?.easy ?: yard?.medium ?: yard?.hard
+            computeRoute(yard?.gateX ?: co.x, yard?.gateZ ?: co.z, label, announce = true, isJob = true, flag = spot)
             return
         }
         val c = m.findCity(t.destCityId)
@@ -945,6 +989,74 @@ class MainActivity : Activity() {
             return
         }
         computeRoute(c.x, c.z, c.name, announce = true, isJob = true)
+    }
+
+    // ---- the game's own GPS destination when there is no job (read from the newest save by the Windows app, /gamegps)
+    private var gameGpsCheckMs = -100000L
+    private var gameGpsBusy = false
+    private var gameGpsSeen = 0L // savedMs of the newest save already looked at
+    private var gameGpsOffered = "" // the destination already offered (not asked again until it changes)
+    private var gameGpsDialog: AlertDialog? = null
+
+    private fun checkGameGps(now: Long) {
+        val m = map ?: return
+        val t = truck ?: return
+        val h = host.substringBefore(":")
+        if (!followGameGps || h.isEmpty() || gameGpsBusy || now - gameGpsCheckMs < 5000L || t.destCityId.isNotEmpty()) return
+        gameGpsCheckMs = now
+        gameGpsBusy = true
+        Thread {
+            var json: org.json.JSONObject? = null
+            try {
+                val c = URL("http://$h:31378/gamegps").openConnection() as HttpURLConnection
+                c.connectTimeout = 3000; c.readTimeout = 8000
+                if (c.responseCode == 200) json = org.json.JSONObject(c.inputStream.bufferedReader().readText())
+                c.disconnect()
+            } catch (_: Throwable) { }
+            ui.post { gameGpsBusy = false; json?.let { offerGameGps(m, it) } }
+        }.start()
+    }
+
+    private fun offerGameGps(m: MapData, j: org.json.JSONObject) {
+        if (!j.optBoolean("available") || j.optBoolean("onJob")) return
+        val saved = j.optLong("savedMs"); if (saved == gameGpsSeen) return
+        gameGpsSeen = saved
+        if (j.optInt("ageSec", 99999) > 15 * 60) return // older saves are not offered (the game has probably moved on since)
+        val arr = j.optJSONArray("ahead") ?: return
+        if (arr.length() == 0 || (truck?.destCityId ?: "").isNotEmpty()) return
+        val pts = (0 until arr.length()).map { val p = arr.getJSONArray(it); Pair(p.getDouble(0).toFloat(), p.getDouble(1).toFloat()) }
+        val (x, z) = pts.last()
+        val key = "${Math.round(x / 20f)}/${Math.round(z / 20f)}"
+        if (key == gameGpsOffered) return
+        gameGpsOffered = key
+        if (hypot(motion.x - x, motion.z - z) < 150f) return // already there
+        if (hasDest && hypot(destX - x, destZ - z) < 80f) return // already going there
+        if (gameGpsDialog?.isShowing == true || jobDialog?.isShowing == true) return
+        val name = describePoint(m, x, z)
+        val via = if (pts.size > 1) " (via ${pts.size - 1} waypoint${if (pts.size > 2) "s" else ""})" else ""
+        gameGpsDialog = AlertDialog.Builder(this)
+            .setTitle("Game GPS")
+            .setMessage("The game's GPS is set to $name, ${gameDist(hypot(motion.x - x, motion.z - z))} away$via. Navigate there?")
+            .setPositiveButton("Navigate") { _, _ ->
+                waypoints.clear()
+                pts.dropLast(1).forEachIndexed { i, p -> waypoints.add(Stop(p.first, p.second, "Game waypoint ${i + 1}")) }
+                computeRoute(x, z, name, announce = true, keepStops = true)
+            }
+            .setNegativeButton("Not now", null)
+            .show()
+    }
+
+    /** A name for a point: the company or ferry terminal there, else the nearest town. */
+    private fun describePoint(m: MapData, x: Float, z: Float): String {
+        val co = m.companies.filter { hypot(it.x - x, it.z - z) < 300f }.minByOrNull { hypot(it.x - x, it.z - z) }
+        val city = m.cities.minByOrNull { hypot(it.x - x, it.z - z) }
+        val cityName = (co?.let { m.findCity(it.cityId)?.name } ?: city?.name) ?: ""
+        val port = m.pois.filter { (it.type == Poi.FERRY || it.type == Poi.TRAIN) && hypot(it.x - x, it.z - z) < 250f }.minByOrNull { hypot(it.x - x, it.z - z) }
+        // a port often has company yards next to it: name whichever of the two the point is nearer to
+        if (port != null && (co == null || hypot(port.x - x, port.z - z) < hypot(co.x - x, co.z - z)))
+            return (if (port.type == Poi.TRAIN) "the car train terminal" else "the ferry terminal") + (if (cityName.isNotEmpty()) ", $cityName" else "")
+        if (co != null) return (m.companyNames[co.id.lowercase()] ?: co.id) + (if (cityName.isNotEmpty()) ", $cityName" else "")
+        return if (city != null && hypot(city.x - x, city.z - z) < 4000f) "a point near ${city.name}" else "the game's destination"
     }
 
     private var lastJobKey = ""
@@ -977,7 +1089,7 @@ class MainActivity : Activity() {
         banner.setMessage("You have arrived")
         n.clear()
         mapView.routePts = FloatArray(0); mapView.routeEdgePt = IntArray(0); mapView.nextManeuver = null; setLaneUi(null)
-        hasDest = false; destIsJob = false
+        hasDest = false; destIsJob = false; jobFlag = null
     }
 
     private fun checkNewJob(t: TruckState) {
@@ -2091,6 +2203,8 @@ class MainActivity : Activity() {
         box.addView(button("Clear avoided roads (${avoidPoints.size})") { clearAvoid() })
         val laneBox = CheckBox(this).apply { text = "Show lane guidance (the lane panel on the map)"; isChecked = showLanes }
         box.addView(laneBox)
+        val gameGpsBox = CheckBox(this).apply { text = "When there is no job, offer to navigate to where the game's own GPS is set (needs the Windows app on the PC; seen after the game's next autosave or quick save)"; isChecked = followGameGps }
+        box.addView(gameGpsBox)
         val updBox = CheckBox(this).apply { text = "Look for new versions automatically (about once a day; nothing is downloaded)"; isChecked = checkUpdates }
         val updText = TextView(this).apply { text = updateStatus(); textSize = 13f }
         lateinit var updOpen: Button
@@ -2116,6 +2230,7 @@ class MainActivity : Activity() {
             if (sc != null && sc > 0f) simScale = sc
             realDist = realBox.isChecked
             showLanes = laneBox.isChecked; if (!showLanes) setLaneUi(null)
+            followGameGps = gameGpsBox.isChecked
             checkUpdates = updBox.isChecked
             nav?.distScale = distScale
             voice.enabled = voiceBox.isChecked

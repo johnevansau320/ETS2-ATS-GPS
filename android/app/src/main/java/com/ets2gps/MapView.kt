@@ -30,6 +30,12 @@ class MapView(ctx: Context) : View(ctx) {
     var hasFix = false
 
     var flagOn = false; var flagX = 0f; var flagZ = 0f // the finishing flag at the destination
+    var flagLink = false // the flag stands beyond the end of the mapped roads (a drop-off spot in a yard): a dashed line joins them
+    private val flagLinkPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; color = Color.argb(230, 255, 255, 255); strokeCap = Paint.Cap.ROUND
+        pathEffect = android.graphics.DashPathEffect(floatArrayOf(6f * resources.displayMetrics.density, 4.5f * resources.displayMetrics.density), 0f)
+        strokeWidth = 3f * resources.displayMetrics.density
+    }
     var routePts = FloatArray(0) // x,z pairs
     var routeLift = ByteArray(0) // per route point: height above the road it crosses (0.5 m units)
     var stops = FloatArray(0) // waypoint positions, x,z pairs (drawn as numbered markers)
@@ -64,6 +70,12 @@ class MapView(ctx: Context) : View(ctx) {
     private val areaPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val areaPath = Path()
     private val shieldPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    // ferry and car-train crossings: a dashed sea line, not a road
+    private val ferryPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; color = Color.argb(170, 90, 160, 255); strokeWidth = 2f * d
+        pathEffect = android.graphics.DashPathEffect(floatArrayOf(4f * d, 3f * d), 0f)
+    }
+    private val ferryEdges = ArrayList<Int>()
     private val shieldEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = Color.WHITE }
     private val shieldText = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textAlign = Paint.Align.CENTER; isFakeBoldText = true }
     private val pillText = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(30, 36, 48); textAlign = Paint.Align.CENTER; isFakeBoldText = true }
@@ -365,11 +377,12 @@ class MapView(ctx: Context) : View(ctx) {
         val zoomFactor = s / (d * 0.55f)
         val showLocal = zoomFactor > 0.3f
         val showJunction = zoomFactor > 0.45f
-        groundSet.clear(); deckSet.clear(); shadowSet.clear()
+        groundSet.clear(); deckSet.clear(); shadowSet.clear(); ferryEdges.clear()
         val hasLift = m.eHasLift.isNotEmpty()
         val liftK = if (tilted) s * sin(tilt) else 0f   // screen px for one metre of height
         val drawRoads = !(planMode && zoomFactor < 0.06f) // zoomed far out while planning: just the route and the towns
         if (drawRoads) m.queryEdges(cx, cz, radius) { e ->
+            if (m.isFerry(e)) { ferryEdges.add(e); return@queryEdges }
             val cls = m.eCls[e].toInt().coerceIn(0, 3)
             if ((cls == 0 && !showLocal) || (cls == 3 && !showJunction)) return@queryEdges
             val a = m.ePtStart[e]
@@ -428,6 +441,13 @@ class MapView(ctx: Context) : View(ctx) {
             }
         }
         drawSegs(groundSet, true); drawSegs(groundSet, false)
+        for (e in ferryEdges) {
+            val a = m.ePtStart[e]; val b = m.ePtStart[e + 1] - 1
+            proj(m.ptX[a], m.ptZ[a]); val x0 = qx; val y0 = qy; val s0 = qs
+            proj(m.ptX[b], m.ptZ[b])
+            if (tilted && (s0 < 0.28f || qs < 0.28f)) continue
+            canvas.drawLine(x0, y0, qx, qy, ferryPaint)
+        }
 
         // route
         val rp0 = if (planMode) planPts else routePts
@@ -482,6 +502,11 @@ class MapView(ctx: Context) : View(ctx) {
 
         // finishing flag at the destination (the end of the mapped road can be well short of it)
         if (flagOn && !planMode) {
+            if (flagLink && routePts.size >= 2) {
+                proj(routePts[routePts.size - 2], routePts[routePts.size - 1]); val rx = qx; val ry = qy; val rs = qs
+                proj(flagX, flagZ)
+                if (!(tilted && (qs < 0.3f || rs < 0.3f))) canvas.drawLine(rx, ry, qx, qy, flagLinkPaint)
+            }
             proj(flagX, flagZ)
             if (visible(80f * d, 80f * d)) {
                 val x = qx; val y = qy

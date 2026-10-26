@@ -27,6 +27,26 @@ class Poi(val type: Int, val x: Float, val z: Float) {
 
 class Company(val id: String, val cityId: String, val x: Float, val z: Float)
 
+/** A company's yard (drops.json from the Windows app): its entrance point and the drop-off spots where the game puts the delivery flag. */
+class CompanyDrops(val gateX: Float, val gateZ: Float, val easy: FloatArray?, val medium: FloatArray?, val hard: FloatArray?) {
+    companion object {
+        /** company/city -> yard, from the JSON list the Windows app serves (empty when it cannot be read). */
+        fun parse(json: String): Map<String, CompanyDrops> {
+            val out = HashMap<String, CompanyDrops>()
+            try {
+                val arr = org.json.JSONArray(json)
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    fun pt(k: String): FloatArray? = o.optJSONArray(k)?.let { a -> if (a.length() >= 2) floatArrayOf(a.getDouble(0).toFloat(), a.getDouble(1).toFloat()) else null }
+                    val gate = pt("Gate") ?: continue
+                    out["${o.getString("Company").lowercase()}/${o.getString("City").lowercase()}"] = CompanyDrops(gate[0], gate[1], pt("Easy"), pt("Medium"), pt("Hard"))
+                }
+            } catch (_: Throwable) { }
+            return out
+        }
+    }
+}
+
 /** A border crossing: kind 0 = checkpoint symbol, 1 = the flag of the country being entered (cc = ISO alpha-2). */
 class BorderPoint(val kind: Int, val cc: String, val x: Float, val z: Float)
 
@@ -200,6 +220,11 @@ class MapData(
     fun distance(x0: Float, z0: Float, x1: Float, z1: Float): Float = hypot(x1 - x0, z1 - z0)
 
     fun findCity(id: String): City? = cities.firstOrNull { it.id.equals(id, ignoreCase = true) }
+
+    /** Drop-off spots of the companies (loaded next to the map when the PC has them). */
+    var drops: Map<String, CompanyDrops> = emptyMap()
+
+    fun findDrops(cityId: String, companyId: String): CompanyDrops? = drops["${companyId.lowercase()}/${cityId.lowercase()}"]
 
     fun findCompany(cityId: String, companyId: String): Company? =
         companies.firstOrNull { it.id.equals(companyId, true) && it.cityId.equals(cityId, true) }

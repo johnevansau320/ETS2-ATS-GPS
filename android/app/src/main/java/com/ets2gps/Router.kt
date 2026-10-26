@@ -207,6 +207,8 @@ class Router(val map: MapData) {
         var best: Snap? = null
         var bestScore = Float.MAX_VALUE
         map.queryEdges(x, z, radius) { e ->
+            // a truck is never on a ferry link: at a port it would otherwise snap onto the crossing and route back over the sea
+            if (map.isFerry(e)) return@queryEdges
             val a = map.ePtStart[e]
             val b = map.ePtStart[e + 1]
             var cum = 0f
