@@ -7,13 +7,13 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.view.View
 
-/** Top banner: pictogram of the next maneuver, distance to it, what to do, and the one after. */
+/** Top banner: pictogram of the next maneuver, distance to it and what to do; the maneuver after it is drawn just below, under the pictogram. */
 class TurnBanner(ctx: Context) : View(ctx) {
     private val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(235, 18, 92, 58) }
     private val big = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; isFakeBoldText = true }
     private val mid = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(230, 255, 255, 255) }
     private val small = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(200, 255, 255, 255) }
-    private val thenBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(120, 0, 0, 0) }
+    private val thenBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(235, 18, 92, 58) } // the green of the banner
     private val rect = RectF()
     private val d = resources.displayMetrics.density
 
@@ -45,13 +45,17 @@ class TurnBanner(ctx: Context) : View(ctx) {
         invalidate()
     }
 
+    // the banner itself is bannerH tall; the view is taller so the "then" box can hang below it (it handles no touches, so they reach the map)
+    private val bannerH get() = 96 * d
+    private val thenSize get() = 64 * d
+
     override fun onMeasure(w: Int, h: Int) {
-        setMeasuredDimension(MeasureSpec.getSize(w), (96 * d).toInt())
+        setMeasuredDimension(MeasureSpec.getSize(w), (bannerH + 8 * d + thenSize + 26 * d).toInt())
     }
 
     override fun onDraw(c: Canvas) {
         val w = width.toFloat()
-        val h = height.toFloat()
+        val h = bannerH
         rect.set(8 * d, 6 * d, w - 8 * d, h - 6 * d)
         c.drawRoundRect(rect, 14 * d, 14 * d, bg)
         val msg = message
@@ -81,17 +85,17 @@ class TurnBanner(ctx: Context) : View(ctx) {
         mid.textSize = 17 * d
         big.textSize = 34 * d
         val textEnd = tx + maxOf(big.measureText(dist), mid.measureText(what)) + 24 * d
-        val thenLeft = w - 20 * d - 52 * d - 4 * d - 14 * d
-        drawJob(c, textEnd, if (hasThen) thenLeft else w - 20 * d, h)
-        if (t != null && t.turn != Turn.ARRIVE) {
-            val bs = 52 * d
-            val cx = w - 20 * d - bs / 2
-            rect.set(cx - bs / 2 - 4 * d, h / 2 - bs / 2 - 4 * d, cx + bs / 2 + 4 * d, h / 2 + bs / 2 + 4 * d)
+        drawJob(c, textEnd, w - 20 * d, h)
+        if (t != null && hasThen) {
+            val bs = thenSize
+            val cx = 18 * d + box / 2 // under the next-turn pictogram
+            val top = h + 8 * d
+            rect.set(cx - bs / 2 - 6 * d, top, cx + bs / 2 + 6 * d, top + bs + 18 * d)
             c.drawRoundRect(rect, 10 * d, 10 * d, thenBg)
-            Glyphs.draw(c, t.turn, t.exitNo, t.angleDeg, cx, h / 2, bs, Color.WHITE)
-            small.textSize = 11 * d
+            small.textSize = 12 * d
             small.textAlign = Paint.Align.CENTER
-            c.drawText("then", cx, h / 2 - bs / 2 - 8 * d, small)
+            c.drawText("then", cx, top + 14 * d, small)
+            Glyphs.draw(c, t.turn, t.exitNo, t.angleDeg, cx, top + 16 * d + bs / 2, bs, Color.WHITE)
         }
     }
 
