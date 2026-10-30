@@ -177,6 +177,18 @@ class Navigator(private val map: MapData, private val router: Router) {
         return result
     }
 
+    // Countries that drive on the left: their roundabouts go round clockwise, so the 1st exit is the leftmost one, not the rightmost.
+    private val leftHandTraffic = setOf("gb", "uk", "ie", "mt", "cy", "im", "gg", "je")
+
+    /** Does traffic go round this roundabout prefab clockwise? The paths through it get longer exit by exit, so when their lengths line
+     *  up with the exits taken in one direction, that is the answer; otherwise it goes by the side of the road the country drives on. */
+    private fun clockwise(entry: Int, alts: List<Pair<Int, Float>>): Boolean {
+        val byLen = alts.sortedBy { map.eLen[it.first shr 1] }.map { it.first }
+        if (byLen == alts.sortedBy { it.second }.map { it.first }) return true
+        if (byLen == alts.sortedByDescending { it.second }.map { it.first }) return false
+        return map.countryAt(map.nodeX[entry], map.nodeZ[entry])?.lowercase() in leftHandTraffic
+    }
+
     // ------------------------------------------------------- roundabouts made of ordinary roads --
     // Many roundabouts are not one prefab: they are a ring of short curved road pieces (and small junction pieces) that the router sees as a
     // closed loop of directed edges: at most 14 edges, 80 to 260 m around, curving the same way for about one full turn.
@@ -300,7 +312,7 @@ class Navigator(private val map: MapData, private val router: Router) {
             val straightest = alts.minByOrNull { abs(it.second) }!!
             val x = map.deX(de, 0); val z = map.deZ(de, 0)
             if (isRoundabout(jid, entry, alts)) {
-                val sorted = alts.sortedByDescending { it.second }
+                val sorted = if (clockwise(entry, alts)) alts.sortedBy { it.second } else alts.sortedByDescending { it.second }
                 val no = sorted.indexOfFirst { it.first == de } + 1
                 out.add(Maneuver(Turn.ROUNDABOUT, cum[k], no, angle, x, z))
                 continue

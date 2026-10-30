@@ -52,6 +52,7 @@ Pinch / +/- to zoom, double-tap resets zoom.
 
 ## Extras
 
+- **Roundabouts where traffic drives on the left** (v1.12.2, with the Windows app v1.10.1): in the UK, Ireland, Malta, Cyprus, the Isle of Man and the Channel Islands roundabout exits are counted clockwise, so the spoken exit and the number in the turn picture match the route.
 - **Then-turn box** (v1.12.1, with the Windows app v1.10.0): the turn after the next one is shown on the left, under the turn picture in the green bar, a little larger and in the same green. The Windows app also quick-saves automatically when the game's GPS gets a new destination before a job starts, so the tablet sees it within seconds.
 - **Drop-off flag and the game's GPS** (v1.12.0, with the Windows app v1.9.0): job routes lead to the company yard's entrance and the flag stands on the drop-off spot inside, joined by a dashed line, with the arrival announced there. When there is no job, the app offers to navigate to where the game's own GPS is set (read from your newest save by the Windows app; Settings switch). Routes avoid closed border crossings, start on the road after a ferry, and ferry crossings show as dashed blue lines. The drop-off spots and the game's GPS need the Windows app on the PC.
 - **App icon** (v1.11.2): the Android app has its own launcher icon (the ETS2 GPS truck and pin artwork) instead of the system compass. The Windows app (v1.7.2) and the web version (favicon, home-screen icon) use the same artwork.
