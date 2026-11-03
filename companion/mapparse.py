@@ -144,7 +144,13 @@ class Defs:
                     grade = 1
                 else:
                     grade = 0
-                self.roadlooks[tok] = (len(ll), len(rr), off, drv(ll), drv(rr), side, grade)
+                # a gravel / dirt road, driveway or farm road without AI traffic: drivable (the game's GPS uses it), kept as
+                # a slow two-way road ("track")
+                track = not lanes and any(x.startswith(("traffic_lane.no_vehicles", "traffic_lane.side_road")) for x in ll + rr)
+                if track:
+                    self.roadlooks[tok] = (len(ll), len(rr), off, 1, 1, "", 0, True)
+                else:
+                    self.roadlooks[tok] = (len(ll), len(rr), off, drv(ll), drv(rr), side, grade, False)
         for f in self._files("def/world", "prefab"):
             for cls, name, p in sii_blocks(decode(fs.read("def/world/" + f))):
                 if cls != "prefab_model" or "prefab_desc" not in p:

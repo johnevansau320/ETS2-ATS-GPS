@@ -595,10 +595,20 @@ class MapView(ctx: Context) : View(ctx) {
                 scaled(x, y, fscale(qs)) {
                     val hw = shieldText.measureText(rl.text) / 2 + 6f * d; val hgt = 12f * d
                     rect.set(x - hw, y - hgt, x + hw, y + hgt)
-                    shieldPaint.color = if (rl.text.startsWith("E")) Color.rgb(0, 128, 72) else Color.rgb(0, 64, 176)
-                    canvas.drawRoundRect(rect, 3f * d, 3f * d, shieldPaint)
-                    canvas.drawRoundRect(rect, 3f * d, 3f * d, shieldEdge)
+                    // ATS: Interstates blue with a red top, US routes white with a black edge, state routes and loops white pills
+                    val interstate = rl.text.startsWith("I-"); val usWhite = !interstate && Games.current == Games.ATS
+                    val r = if (usWhite && !rl.text.startsWith("US ")) hgt else 3f * d
+                    shieldPaint.color = if (usWhite) Color.WHITE else if (rl.text.startsWith("E") && Games.current != Games.ATS) Color.rgb(0, 128, 72) else Color.rgb(0, 64, 176)
+                    canvas.drawRoundRect(rect, r, r, shieldPaint)
+                    if (interstate) {
+                        canvas.save(); canvas.clipRect(rect.left, rect.top, rect.right, rect.top + rect.height() * 0.26f)
+                        shieldPaint.color = Color.rgb(190, 30, 45); canvas.drawRoundRect(rect, r, r, shieldPaint); canvas.restore()
+                    }
+                    val edgeColor = shieldEdge.color; val textColor = shieldText.color
+                    if (usWhite) { shieldEdge.color = Color.rgb(20, 20, 20); shieldText.color = Color.rgb(20, 20, 20) }
+                    canvas.drawRoundRect(rect, r, r, shieldEdge)
                     canvas.drawText(rl.text, x, y + 6f * d, shieldText)
+                    shieldEdge.color = edgeColor; shieldText.color = textColor
                 }
             }
         }
@@ -722,4 +732,79 @@ class MapView(ctx: Context) : View(ctx) {
     private val stopBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
 
     private fun abs2(dx: Float, dz: Float) = dx * dx + dz * dz
+}
+
+/**
+ * The game's road pieces do not meet exactly: a road ends on its centre line while the junction piece after it starts on the lane, a few metres to the side. Drawn as is, the route steps sideways at every join. Both sides of a join are eased towards its middle over a short stretch (only points move, so indices into the line stay valid).
+ */
+fun smoothJoins(pts: FloatArray, starts: IntArray) {
+    val o = pts.copyOf()
+    val n = pts.size / 2
+    fun seg(p: Int, q: Int) = kotlin.math.hypot(o[q * 2] - o[p * 2], o[q * 2 + 1] - o[p * 2 + 1])
+    for (i in 1 until starts.size) {
+        val s = starts[i]; val e = s - 1; val a0 = starts[i - 1]; val b1 = if (i + 1 < starts.size) starts[i + 1] - 1 else n - 1
+        if (e < a0 || s > b1) continue
+        val gx = o[s * 2] - o[e * 2]; val gz = o[s * 2 + 1] - o[e * 2 + 1]; val g = kotlin.math.hypot(gx, gz)
+        if (g < 0.3f || g > 25f) continue // joined already, or a real gap (ferry)
+        val len = (g * 4f).coerceIn(8f, 40f)
+        fun ease(from: Int, to: Int, step: Int, sign: Float) {
+            var total = 0f
+            var k = from
+            while (k != to) { total += seg(k, k + step); k += step }
+            val l = maxOf(0.01f, minOf(len, total / 2f))
+            var d = 0f; k = from
+            while (true) {
+                val t = 1f - d / l
+                if (t <= 0f) break
+                pts[k * 2] += sign * gx / 2f * t; pts[k * 2 + 1] += sign * gz / 2f * t
+                if (k == to) break
+                d += seg(k, k + step); k += step
+            }
+        }
+        ease(e, a0, -1, 1f) // the end of the piece before moves half way towards the next
+        ease(s, b1, 1, -1f) // the start of the next piece moves half way back
+    }
+    smoothLine(pts); smoothLine(pts)
+}
+
+/**
+ * Inside junction pieces the route still hops from lane to lane in short sideways steps. Each point is replaced by the average of the line
+ * around it (a triangle-weighted window along the line, up to 60 m each way; done twice). Where the road really bends the window shrinks, so a bend
+ * is never cut by more than about half a metre; the ends of the line and real gaps (ferries) stay where they are.
+ */
+private fun smoothLine(pts: FloatArray) {
+    val n = pts.size / 2
+    val o = pts.copyOf()
+    val s = DoubleArray(n)
+    for (i in 1 until n) s[i] = s[i - 1] + kotlin.math.hypot(o[i * 2] - o[i * 2 - 2], o[i * 2 + 1] - o[i * 2 - 1])
+    var a = 0
+    while (a < n) {
+        var b = a // one run of the line without a gap
+        while (b + 1 < n && s[b + 1] - s[b] <= 25) b++
+        val runA = a; val runB = b
+        fun at(tIn: Double): DoubleArray { // the point at distance t along the run
+            val t = tIn.coerceIn(s[runA], s[runB])
+            var lo = runA; var hi = runB
+            while (hi - lo > 1) { val m = (lo + hi) ushr 1; if (s[m] <= t) lo = m else hi = m }
+            val f = if (s[hi] > s[lo]) (t - s[lo]) / (s[hi] - s[lo]) else 0.0
+            return doubleArrayOf(o[lo * 2] + (o[hi * 2] - o[lo * 2]) * f, o[lo * 2 + 1] + (o[hi * 2 + 1] - o[lo * 2 + 1]) * f)
+        }
+        for (i in a + 1 until b) {
+            val t = s[i]
+            // how sharply the road bends here: heading 15-60 m before against 15-60 m after
+            val p0 = at(t - 60); val p1 = at(t - 15); val p2 = at(t + 15); val p3 = at(t + 60)
+            var turn = kotlin.math.abs(kotlin.math.atan2(p3[1] - p2[1], p3[0] - p2[0]) - kotlin.math.atan2(p1[1] - p0[1], p1[0] - p0[0]))
+            if (turn > Math.PI) turn = 2 * Math.PI - turn
+            val radius = 75 / maxOf(turn, 1e-3)
+            val w = minOf(60.0, kotlin.math.sqrt(12 * radius * 0.5), t - s[a], s[b] - t) // a bend of radius r is cut by about w*w/(12r)
+            if (w < 1) continue
+            var sx = 0.0; var sz = 0.0; var sw = 0.0
+            for (k in -10..10) {
+                val q = at(t + w * k / 10); val wt = (11 - kotlin.math.abs(k)).toDouble()
+                sx += q[0] * wt; sz += q[1] * wt; sw += wt
+            }
+            pts[i * 2] = (sx / sw).toFloat(); pts[i * 2 + 1] = (sz / sw).toFloat()
+        }
+        a = b + 1
+    }
 }

@@ -126,8 +126,8 @@ class TurnBanner(ctx: Context) : View(ctx) {
         val line1 = fit(place(j.srcCompany, j.srcCity) + "  \u2192  " + place(j.destCompany, j.destCity), jobPaintBold, avail)
         c.drawText(line1, right, h / 2 - 5 * d, jobPaintBold)
         val parts = ArrayList<String>()
-        if (j.cargo.isNotEmpty()) parts.add(j.cargo + if (j.massKg > 0) String.format(java.util.Locale.US, " %.1f t", j.massKg / 1000f) else "")
-        if (j.income > 0) parts.add("\u20ac" + String.format(java.util.Locale.US, "%,d", j.income))
+        if (j.cargo.isNotEmpty()) parts.add(j.cargo + if (j.massKg > 0) " " + Units.mass(j.massKg) else "")
+        if (j.income > 0) parts.add(Units.money + String.format(java.util.Locale.US, "%,d", j.income))
         var due = ""
         var late = false
         if (j.dueMin >= 0) {

@@ -165,7 +165,7 @@ class TripScreen(ctx: Context) : View(ctx) {
         // clocks
         labelP.textSize = 8f
         cv.drawText("LOCAL", 860f, 26f, labelP)
-        cv.drawText("ETS2", 860f, 56f, labelP)
+        cv.drawText(Games.current.short, 860f, 56f, labelP)
         bigP.textSize = 15f
         bigP.textAlign = Paint.Align.RIGHT
         cv.drawText(dd.local, 988f, 28f, bigP)

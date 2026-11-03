@@ -42,8 +42,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : Activity() {
     companion object {
-        /** ETS2 runs its clock 19x faster than real time. */
-        const val TIME_SCALE = 19f
+        /** The game clock runs this much faster than real time: ETS2 19x, ATS 20x. */
+        val TIME_SCALE: Float get() = if (Games.current == Games.ATS) 20f else 19f
         const val LANE_SHOW_M = 50_000f // lane panel appears this far (in game metres) before the junction
     }
 
@@ -199,8 +199,10 @@ class MainActivity : Activity() {
         set(v) { prefs.edit().putString("host", cleanHost(v)).apply() }
     /** The game (Sim) scale: map metres x this are the distances the game shows. */
     private var simScale: Float
-        get() = prefs.getFloat("scale", 19f)
-        set(v) { prefs.edit().putFloat("scale", v).apply() }
+        get() = prefs.getFloat(gk("scale"), Games.current.scale)
+        set(v) { prefs.edit().putFloat(gk("scale"), v).apply() }
+    /** ATS has its own map, so its saved trips, avoided roads and Sim scale are kept apart from ETS2's ("trips.ats" ...). */
+    private fun gk(k: String) = if (Games.current == Games.ATS) "$k.ats" else k
     private var realDist: Boolean
         get() = prefs.getBoolean("real", false)
         set(v) { prefs.edit().putBoolean("real", v).apply() }
@@ -218,6 +220,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        Games.current = Games.byId(prefs.getString("game", "ets2"))
         buildUi()
         voice = Voice(this)
         voice.enabled = prefs.getBoolean("voice", true)
@@ -390,9 +393,9 @@ class MainActivity : Activity() {
         speedText = TextView(this).apply {
             setTextColor(Color.WHITE); textSize = 34f; typeface = Typeface.DEFAULT_BOLD; text = "0"
         }
-        val speedUnit = TextView(this).apply { setTextColor(Color.LTGRAY); textSize = 11f; text = "km/h" }
+        speedUnitText = TextView(this).apply { setTextColor(Color.LTGRAY); textSize = 11f; text = Units.speedUnit }
         val speedBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
-        speedBox.addView(speedText); speedBox.addView(speedUnit)
+        speedBox.addView(speedText); speedBox.addView(speedUnitText)
         bar.addView(speedBox, LinearLayout.LayoutParams(dp(78), ViewGroup.LayoutParams.WRAP_CONTENT))
 
         limitText = TextView(this).apply {
@@ -400,6 +403,7 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.WHITE); visibility = View.INVISIBLE; text = "--"
         }
         bar.addView(limitText, LinearLayout.LayoutParams(dp(46), dp(46)).apply { rightMargin = dp(12) })
+        styleLimitSign()
 
 
         infoText = TextView(this).apply { setTextColor(Color.WHITE); textSize = 15f; text = "No route" }
@@ -531,7 +535,7 @@ class MainActivity : Activity() {
                     if (on != null) toast(if (state) "Cruise control will follow the speed limit while the game is in front" else "Cruise control stays where you set it")
                 }
             } catch (_: Exception) {
-                ui.post { if (on != null) toast("Needs the ETS2 GPS Windows app on the PC (it presses the cruise keys)") }
+                ui.post { if (on != null) toast("Needs the ETS2-ATS GPS Windows app on the PC (it presses the cruise keys)") }
             }
         }
     }
@@ -572,9 +576,10 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------------------- map file --
 
-    private fun mapFile() = File(filesDir, "etsmap.bin")
-    private fun assetsFile() = File(filesDir, "etsassets.bin")
-    private fun dropsFile() = File(filesDir, "etsmap.drops.json")
+    // one set of files per game: etsmap.bin ... for ETS2, atsmap.bin ... for ATS
+    private fun mapFile() = File(filesDir, Games.current.filePrefix + "map.bin")
+    private fun assetsFile() = File(filesDir, Games.current.filePrefix + "assets.bin")
+    private fun dropsFile() = File(filesDir, Games.current.filePrefix + "map.drops.json")
 
     /** Best effort: the Windows app serves the companies' drop-off spots next to the map (the delivery flag goes there). */
     private fun downloadDrops(h: String): Boolean {
@@ -599,7 +604,7 @@ class MainActivity : Activity() {
 
     /** Best effort: the Windows app serves the logos and flags next to the map; other servers just do not have them. */
     private fun downloadAssets(h: String) {
-        val tmp = File(filesDir, "etsassets.bin.tmp")
+        val tmp = File(filesDir, Games.current.filePrefix + "assets.bin.tmp")
         try {
             val c = URL("http://$h:31378/assets.bin").openConnection() as HttpURLConnection
             c.connectTimeout = 4000
@@ -653,11 +658,16 @@ class MainActivity : Activity() {
         if (h.isEmpty()) { toast("Set the PC address first"); return }
         downloading = true
         bg.execute {
-            val tmp = File(filesDir, "etsmap.bin.tmp")
+            val tmp = File(filesDir, Games.current.filePrefix + "map.bin.tmp")
             try {
                 val c = URL("http://$h:31378/map.bin").openConnection() as HttpURLConnection
                 c.connectTimeout = 4000
                 c.readTimeout = 15000
+                val pcGame = c.getHeaderField("X-Map-Game")
+                if (pcGame != null && Games.byId(pcGame) != Games.current) {
+                    c.disconnect()
+                    throw WrongGameMap(Games.byId(pcGame))
+                }
                 val total = c.contentLengthLong
                 var done = 0L
                 var lastPct = -1
@@ -686,15 +696,61 @@ class MainActivity : Activity() {
                 }
                 downloadAssets(h)
                 downloadDrops(h)
-                ui.post { downloading = false; loadMapAsync() }
+                ui.post { downloading = false; waitingForGame = false; loadMapAsync() }
+            } catch (w: WrongGameMap) {
+                tmp.delete()
+                ui.post {
+                    downloading = false
+                    banner.setMessage("Your PC has the ${w.pcGame.name} map - waiting for its ${Games.current.name} map")
+                    if (waitingForGame) ui.postDelayed({ if (waitingForGame && map == null) downloadMap() }, 10_000L)
+                }
             } catch (t: Throwable) {
                 tmp.delete()
                 ui.post {
                     downloading = false
                     banner.setMessage("Download failed: ${t.javaClass.simpleName} ${t.message ?: ""} - is the companion running?")
+                    if (waitingForGame) ui.postDelayed({ if (waitingForGame && map == null) downloadMap() }, 10_000L)
                 }
             }
         }
+    }
+
+    // ------------------------------------------------------------------------------- games --
+
+    private class WrongGameMap(val pcGame: GameInfo) : Exception()
+    private var waitingForGame = false
+    private lateinit var speedUnitText: TextView
+
+    /** The other game is running: drop the route, switch units and settings, and load that game's map (downloading it from the PC when this device has none). */
+    private fun switchGame(g: GameInfo) {
+        cancelRoute()
+        Games.current = g
+        prefs.edit().putString("game", g.id).apply()
+        map = null; router = null; nav = null; mapView.map = null; mapView.assets = null
+        speedUnitText.text = Units.speedUnit
+        styleLimitSign()
+        toast("${g.name} is running: switching to its map")
+        if (mapFile().exists()) loadMapAsync()
+        else { waitingForGame = true; banner.setMessage("Downloading the ${g.name} map from your PC..."); downloadMap() }
+    }
+
+    /** A plain white square for ETS2; an American "SPEED LIMIT" sign with a black edge for ATS. */
+    private fun styleLimitSign() {
+        val us = Games.current == Games.ATS
+        limitText.background = android.graphics.drawable.GradientDrawable().apply {
+            setColor(Color.WHITE)
+            if (us) { setStroke(dp(2), Color.BLACK); cornerRadius = dp(4).toFloat() }
+        }
+        limitText.layoutParams = (limitText.layoutParams as LinearLayout.LayoutParams).apply { width = dp(if (us) 42 else 46); height = dp(if (us) 54 else 46) }
+    }
+
+    private fun setLimit(kmh: Int) {
+        val v = Math.round(Units.speed(kmh.toFloat())).toString()
+        if (Games.current != Games.ATS) { limitText.text = v; return }
+        val cap = "SPEED\nLIMIT\n"
+        val sp = android.text.SpannableString(cap + v)
+        sp.setSpan(android.text.style.RelativeSizeSpan(0.36f), 0, cap.length, 0)
+        limitText.text = sp
     }
 
     // --------------------------------------------------------------------------- telemetry --
@@ -705,6 +761,8 @@ class MainActivity : Activity() {
     }
 
     private fun onTruck(s: TruckState) {
+        val tg = Games.fromName(s.gameName)
+        if (s.connected && tg != null && tg != Games.current) { switchGame(tg); return }
         truck = s
         banner.setJob(s.job, if (nav?.active == true && routeEtaGameMin >= 0) routeEtaGameMin else s.navEtaMin)
         val now = SystemClock.elapsedRealtime()
@@ -712,9 +770,9 @@ class MainActivity : Activity() {
         mapView.hasFix = s.connected && (s.x != 0f || s.z != 0f)
         mapView.speedKmh = s.speedKmh
         statusText.text = if (!s.connected) "Telemetry connected - waiting for the game" else if (s.paused) "Game paused" else place
-        speedText.text = Math.round(s.speedKmh.coerceAtLeast(0f)).toString()
+        speedText.text = Math.round(Units.speed(s.speedKmh).coerceAtLeast(0f)).toString()
         if (s.speedLimitKmh > 0) {
-            limitText.text = s.speedLimitKmh.toString(); limitText.visibility = View.VISIBLE
+            setLimit(s.speedLimitKmh); limitText.visibility = View.VISIBLE
         } else limitText.visibility = View.INVISIBLE
         trackTrip(s, now)
         if (tripScreen.visibility == View.VISIBLE) updateTrip()
@@ -939,6 +997,7 @@ class MainActivity : Activity() {
                         pts[p * 2] = m.deX(de, k); pts[p * 2 + 1] = m.deZ(de, k); lift[p] = (m.deLift(de, k) * 2).toInt().toByte(); p++
                     }
                 }
+                smoothJoins(pts, starts)
                 ui.post {
                     n.distScale = distScale
                     n.arriveWord = if (legIsStop) "your waypoint" else if (destIsJob) "the destination area" else "your destination"
@@ -1128,10 +1187,7 @@ class MainActivity : Activity() {
         return hits.sortedBy { if (it.ahead < -0.3f) it.dist * 2f else it.dist }.take(limit)
     }
 
-    private fun gameDist(worldM: Float): String {
-        val g = worldM * distScale
-        return if (g < 1000f) "${max(10, (g / 10f).roundToInt() * 10)} m" else String.format(java.util.Locale.US, "%.1f km", g / 1000f)
-    }
+    private fun gameDist(worldM: Float): String = Units.short(worldM * distScale)
 
     private fun direction(h: PoiHit): String = when {
         h.ahead > 0.5f -> "ahead"
@@ -1237,8 +1293,8 @@ class MainActivity : Activity() {
             val rows = ArrayList<TripRow>()
             rows.add(TripRow("From", listOf(j.srcCompany, j.srcCity).filter { it.isNotEmpty() }.joinToString(", ")))
             rows.add(TripRow("To", listOf(j.destCompany, j.destCity).filter { it.isNotEmpty() }.joinToString(", ")))
-            rows.add(TripRow("Cargo", j.cargo + (if (j.massKg > 0f) String.format(java.util.Locale.US, "  %.1f t", j.massKg / 1000f) else "")))
-            if (j.income > 0) rows.add(TripRow("Income", "\u20ac" + String.format(java.util.Locale.US, "%,d", j.income)))
+            rows.add(TripRow("Cargo", j.cargo + (if (j.massKg > 0f) "  " + Units.mass(j.massKg) else "")))
+            if (j.income > 0) rows.add(TripRow("Income", Units.money + String.format(java.util.Locale.US, "%,d", j.income)))
             if (j.dueMin >= 0f) {
                 val late = simMin >= 0f && simMin > j.dueMin
                 rows.add(TripRow("Deadline in", formatDuration(j.dueMin) + " (sim)", if (late) red else white))
@@ -1247,7 +1303,7 @@ class MainActivity : Activity() {
                     rows.add(TripRow(if (late) "Running late by" else "Time to spare", formatDuration(Math.abs(spare)) + " (sim)", if (late) red else Color.rgb(120, 220, 150)))
                 }
             }
-            if (j.plannedKm > 0) rows.add(TripRow("Planned distance", "${j.plannedKm} km"))
+            if (j.plannedKm > 0) rows.add(TripRow("Planned distance", Units.longText(j.plannedKm.toFloat())))
             var bar: Float? = null
             var note = ""
             if (j.plannedKm > 0 && remGameKm > 0f) {
@@ -1263,13 +1319,13 @@ class MainActivity : Activity() {
         val rr = ArrayList<TripRow>()
         rr.add(TripRow("Destination", if (hasDest) destName else "none"))
         if (routing && n != null) {
-            rr.add(TripRow("Remaining", "%,.0f km".format(remGameKm)))
+            rr.add(TripRow("Remaining", Units.longText(remGameKm)))
             rr.add(TripRow("Real time left", formatDuration(realMin)))
             rr.add(TripRow("Sim time left", formatDuration(simMin)))
             rr.add(TripRow("Arrive (sim clock)", clockText(s.gameTimeMin + simMin)))
             if (lastNextText.isNotEmpty()) rr.add(TripRow("Next", lastNextText.replaceFirstChar { it.uppercase() }))
         } else {
-            rr.add(TripRow("Game route left", String.format(java.util.Locale.US, "%.0f km", remGameKm)))
+            rr.add(TripRow("Game route left", Units.longText(remGameKm)))
             if (simMin >= 0f) rr.add(TripRow("Game ETA (sim)", formatDuration(simMin)))
         }
         rr.add(TripRow("Route type", routeMode.label))
@@ -1280,11 +1336,11 @@ class MainActivity : Activity() {
             val fr = if (dt.fuelCapL > 0f) dt.fuelL / dt.fuelCapL else 0f
             val tr = ArrayList<TripRow>()
             tr.add(TripRow("Truck", dt.truckName.ifEmpty { "-" }))
-            tr.add(TripRow("Fuel", String.format(java.util.Locale.US, "%.0f / %.0f L  (%.0f%%)", dt.fuelL, dt.fuelCapL, fr * 100f), if (fr < 0.12f) red else if (fr < 0.25f) amber else white))
-            tr.add(TripRow("Range", String.format(java.util.Locale.US, "%.0f km", dt.rangeKm)))
-            tr.add(TripRow("Consumption", String.format(java.util.Locale.US, "%.1f L/100 km", dt.consumptionLPerKm * 100f)))
-            tr.add(TripRow("Odometer", String.format(java.util.Locale.US, "%,.0f km", dt.odometerKm)))
-            tr.add(TripRow("Speed", "${Math.round(s.speedKmh.coerceAtLeast(0f))} km/h" + (if (s.speedLimitKmh > 0) "  (limit ${s.speedLimitKmh})" else "")))
+            tr.add(TripRow("Fuel", String.format(java.util.Locale.US, "%.0f / %s  (%.0f%%)", Units.fuel(dt.fuelL), Units.fuelText(dt.fuelCapL), fr * 100f), if (fr < 0.12f) red else if (fr < 0.25f) amber else white))
+            tr.add(TripRow("Range", Units.longText(dt.rangeKm)))
+            tr.add(TripRow("Consumption", Units.consumption(dt.consumptionLPerKm)))
+            tr.add(TripRow("Odometer", Units.longText(dt.odometerKm)))
+            tr.add(TripRow("Speed", Units.speedText(s.speedKmh) + (if (s.speedLimitKmh > 0) "  (limit ${Math.round(Units.speed(s.speedLimitKmh.toFloat()))})" else "")))
             cards.add(TripCard("TRUCK", tr, fr, if (fr < 0.12f) red else if (fr < 0.25f) amber else Color.rgb(110, 200, 130), "fuel tank"))
 
             // TRAILER / DAMAGE
@@ -1308,15 +1364,15 @@ class MainActivity : Activity() {
         val driveHours = tripDriveMs / 3_600_000f
         val avg = if (driveHours > 0.001f) (motion.travelled - tripBase) / (tripDriveMs / 1000f) * 3.6f else 0f
         val sr = ArrayList<TripRow>()
-        sr.add(TripRow("Distance driven", String.format(java.util.Locale.US, "%.0f km", drivenGameKm)))
+        sr.add(TripRow("Distance driven", Units.longText(drivenGameKm)))
         sr.add(TripRow("Driving time (real)", formatDuration(tripDriveMs / 60000f)))
         sr.add(TripRow("Driving time (sim)", formatDuration(tripDriveMs / 60000f * TIME_SCALE)))
-        sr.add(TripRow("Average speed", String.format(java.util.Locale.US, "%.0f km/h", avg)))
-        sr.add(TripRow("Top speed", String.format(java.util.Locale.US, "%.0f km/h", tripMaxKmh)))
-        sr.add(TripRow("Climbed / descended", String.format(java.util.Locale.US, "%.0f / %.0f m", elev.ascent(), elev.descent())))
-        sr.add(TripRow("Fuel used", String.format(java.util.Locale.US, "%.0f L", tripFuelUsed)))
+        sr.add(TripRow("Average speed", Units.speedText(avg)))
+        sr.add(TripRow("Top speed", Units.speedText(tripMaxKmh)))
+        sr.add(TripRow("Climbed / descended", "${Math.round(Units.alt(elev.ascent()))} / ${Units.altText(elev.descent())}"))
+        sr.add(TripRow("Fuel used", Units.fuelText(tripFuelUsed)))
         if (drivenGameKm > 5f && tripFuelUsed > 0f) {
-            sr.add(TripRow("Trip consumption", String.format(java.util.Locale.US, "%.1f L/100 km", tripFuelUsed / drivenGameKm * 100f)))
+            sr.add(TripRow("Trip consumption", Units.consumption(tripFuelUsed / drivenGameKm)))
         }
         cards.add(TripCard("THIS TRIP", sr))
 
@@ -1368,37 +1424,37 @@ class MainActivity : Activity() {
         val market = (dt?.jobMarket ?: "").replace('_', ' ').uppercase().ifEmpty { "-" }
         val row1 = listOf(
             DashCard("CARGO", j?.cargo?.ifEmpty { "-" } ?: "-", white, "", "", green, listOf(
-                TripRow("Mass", if (j != null && j.massKg > 0f) String.format(us, "%.1f t", j.massKg / 1000f) else "-"),
+                TripRow("Mass", if (j != null && j.massKg > 0f) Units.mass(j.massKg) else "-"),
                 TripRow("Units", (j?.units ?: 0).toString()),
                 TripRow("Cargo damage", pct(dt?.cargoDamage ?: 0f), if ((dt?.cargoDamage ?: 0f) < 0.5f) green else TripScreen.pctColor(dt?.cargoDamage ?: 0f)),
                 TripRow("Trailer", dt?.trailerName?.ifEmpty { "-" } ?: "-"),
             )),
-            DashCard("ARRIVAL (ETS2 CLOCK)", arrBig, white, arrSub, "", green, listOf(
+            DashCard("ARRIVAL (${Games.current.short} CLOCK)", arrBig, white, arrSub, "", green, listOf(
                 TripRow("ETA (your clock)", etaYours),
                 TripRow("Time left (game)", if (simMin >= 0f) durShort(simMin) else "-"),
                 TripRow("Time left (real)", if (realMin >= 0f) durShort(realMin) else "-"),
-                TripRow("Distance left", String.format(us, "%,.0f km", remGameKm)),
+                TripRow("Distance left", Units.longText(remGameKm)),
             )),
             DashCard("TIME REMAINING TO DEADLINE", if (dueMin >= 0f) durShort(dueMin) else "-", white, "",
                 if (dueMin < 0f) "" else if (late) "LATE" else "ON TIME", if (late) red else green, listOf(
                     TripRow("Deadline", if (dueMin >= 0f && gameNow >= 0f) clockText(gameNow + dueMin).uppercase() else "-"),
                     TripRow("ETA", if (arrAbs >= 0f) clockText(arrAbs).uppercase() else "-"),
                     TripRow("Margin", if (spare != null) (if (spare >= 0f) "+" else "-") + durShort(spare) else "-", if (spare != null && spare < 0f) red else green),
-                    TripRow("Avg speed needed", if (avgNeeded >= 0f) String.format(us, "%.0f km/h", avgNeeded) else "-"),
+                    TripRow("Avg speed needed", if (avgNeeded >= 0f) Units.speedText(avgNeeded) else "-"),
                 )),
             DashCard("FUEL FOR THIS TRIP", if (fr >= 0f) String.format(us, "%.0f%%", fr * 100f) else "-",
                 if (fr < 0.12f) red else if (fr < 0.25f) amber else green,
-                if (dt != null) String.format(us, "%.0f / %.0f L", dt.fuelL, dt.fuelCapL) else "",
+                if (dt != null) String.format(us, "%.0f / %s", Units.fuel(dt.fuelL), Units.fuelText(dt.fuelCapL)) else "",
                 if (dt == null || remGameKm <= 0f) "" else if (atArrival < 0f) "REFUEL NEEDED" else "ENOUGH FUEL",
                 if (atArrival < 0f) red else green, listOf(
-                    TripRow("Range", if (dt != null) String.format(us, "%,.0f km", dt.rangeKm) else "-"),
-                    TripRow("Consumption", if (dt != null) String.format(us, "%.1f L/100km", dt.consumptionLPerKm * 100f) else "-"),
-                    TripRow("Needed for trip", String.format(us, "%.0f L", needL)),
-                    TripRow("Fuel at arrival", String.format(us, "%.0f L", atArrival), if (atArrival < 0f) red else white),
+                    TripRow("Range", if (dt != null) Units.longText(dt.rangeKm) else "-"),
+                    TripRow("Consumption", if (dt != null) Units.consumption(dt.consumptionLPerKm) else "-"),
+                    TripRow("Needed for trip", Units.fuelText(needL)),
+                    TripRow("Fuel at arrival", Units.fuelText(atArrival), if (atArrival < 0f) red else white),
                 )),
-            DashCard("JOB & INCOME", if (j != null && j.income > 0) "\u20ac " + String.format(us, "%,d", j.income) else "-", white, "", "", green, listOf(
-                TripRow("Planned distance", if (planned > 0) String.format(us, "%,d km", planned) else "-"),
-                TripRow("Income rate", if (j != null && planned > 0 && j.income > 0) "\u20ac " + String.format(us, "%.2f/km", j.income.toFloat() / planned) else "-"),
+            DashCard("JOB & INCOME", if (j != null && j.income > 0) Units.money + " " + String.format(us, "%,d", j.income) else "-", white, "", "", green, listOf(
+                TripRow("Planned distance", if (planned > 0) Units.longText(planned.toFloat()) else "-"),
+                TripRow("Income rate", if (j != null && planned > 0 && j.income > 0) Units.money + " " + String.format(us, "%.2f/%s", j.income.toFloat() / Units.long(planned.toFloat()), Units.distUnit) else "-"),
                 TripRow("Job market", market),
                 TripRow("Special job", if (market.contains("SPECIAL")) "YES" else "NO"),
             )),
@@ -1409,8 +1465,8 @@ class MainActivity : Activity() {
         val dash = DashData(
             fromCity = j?.srcCity ?: "-", fromCompany = j?.srcCompany ?: "",
             toCity = j?.destCity ?: (if (hasDest) destName else "-"), toCompany = j?.destCompany ?: "",
-            leftText = String.format(us, "%,.0f km left", remGameKm),
-            ofText = if (planned > 0) String.format(us, "of %,d km  \u00b7  %.0f%%", planned, progress * 100f) else "",
+            leftText = Units.longText(remGameKm) + " left",
+            ofText = if (planned > 0) String.format(us, "of %s  \u00b7  %.0f%%", Units.longText(planned.toFloat()), progress * 100f) else "",
             progress = progress,
             local = String.format(us, "%02d:%02d:%02d", calNow.get(java.util.Calendar.HOUR_OF_DAY), calNow.get(java.util.Calendar.MINUTE), calNow.get(java.util.Calendar.SECOND)),
             sim = clockText(gameNow).uppercase(),
@@ -1425,7 +1481,7 @@ class MainActivity : Activity() {
         val g = motion.gradientPct
         val arrow = if (!motion.gradientValid || Math.abs(g) < 0.5f) "\u25AC" else if (g > 0) "\u25B2" else "\u25BC"
         val gs = if (motion.gradientValid) String.format(java.util.Locale.US, "%s %.1f%%", arrow, Math.abs(g)) else arrow
-        altText.text = "$gs\n${Math.round(s.y)} m"
+        altText.text = "$gs\n${Units.altText(s.y)}"
         altText.setTextColor(when {
             motion.gradientValid && g <= -5f -> Color.rgb(255, 170, 90)
             motion.gradientValid && g >= 6f -> Color.rgb(255, 120, 120)
@@ -1460,9 +1516,8 @@ class MainActivity : Activity() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(6), dp(14), 0) }
         var lo = Float.MAX_VALUE; var hi = -Float.MAX_VALUE
         for (i in 0 until elev.size) { lo = minOf(lo, elev.alt[i]); hi = maxOf(hi, elev.alt[i]) }
-        val summary = if (elev.size < 2) "No data yet" else String.format(
-            java.util.Locale.US, "Now %.0f m  \u00b7  climbed %.0f m  \u00b7  descended %.0f m  \u00b7  range %.0f to %.0f m",
-            truck?.y ?: 0f, elev.ascent(), elev.descent(), lo, hi)
+        val summary = if (elev.size < 2) "No data yet" else
+            "Now ${Units.altText(truck?.y ?: 0f)}  \u00b7  climbed ${Units.altText(elev.ascent())}  \u00b7  descended ${Units.altText(elev.descent())}  \u00b7  range ${Math.round(Units.alt(lo))} to ${Units.altText(hi)}"
         box.addView(TextView(this).apply { text = summary; textSize = 13f; setPadding(0, 0, 0, dp(8)) })
         box.addView(ElevationChart(this, elev, distScale))
         AlertDialog.Builder(this).setTitle("Trip elevation").setView(box)
@@ -1539,7 +1594,7 @@ class MainActivity : Activity() {
     private fun loadTrips(): MutableList<SavedTrip> {
         val out = ArrayList<SavedTrip>()
         try {
-            val arr = org.json.JSONArray(prefs.getString("trips", "[]") ?: "[]")
+            val arr = org.json.JSONArray(prefs.getString(gk("trips"), "[]") ?: "[]")
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
                 val st = o.getJSONArray("stops")
@@ -1556,7 +1611,7 @@ class MainActivity : Activity() {
         for (t in list) arr.put(org.json.JSONObject().put("name", t.name).put("mode", t.mode).put("dest", stopJson(t.dest))
             .put("stops", org.json.JSONArray().also { a -> t.stops.forEach { a.put(stopJson(it)) } }).put("len", t.lengthM.toDouble()).put("ferry", t.avoidFerries)
             .also { o -> t.start?.let { o.put("start", stopJson(it)) } })
-        prefs.edit().putString("trips", arr.toString()).apply()
+        prefs.edit().putString(gk("trips"), arr.toString()).apply()
     }
 
     /** Saves the planned trip (destination, waypoints and route type) under a name the user can edit. */
@@ -1733,7 +1788,7 @@ class MainActivity : Activity() {
     // roads the user has found blocked (invisible barriers, closures) are remembered and routed around
     private fun loadAvoid() {
         avoidPoints.clear()
-        for (part in (prefs.getString("avoid", "") ?: "").split(";")) {
+        for (part in (prefs.getString(gk("avoid"), "") ?: "").split(";")) {
             val xy = part.split(",")
             if (xy.size == 2) {
                 val x = xy[0].toFloatOrNull(); val z = xy[1].toFloatOrNull()
@@ -1743,7 +1798,7 @@ class MainActivity : Activity() {
     }
 
     private fun saveAvoid() {
-        prefs.edit().putString("avoid", avoidPoints.joinToString(";") { "${it.first},${it.second}" }).apply()
+        prefs.edit().putString(gk("avoid"), avoidPoints.joinToString(";") { "${it.first},${it.second}" }).apply()
     }
 
     private fun avoidRoadAt(x: Float, z: Float) {
@@ -1919,7 +1974,7 @@ class MainActivity : Activity() {
             ui.post {
                 if (out.error == null) {
                     plan.lengthM = out.lengthM; plan.timeS = out.timeS
-                    mapView.planPts = out.pts; mapView.planLift = out.lift; mapView.planEdgePt = out.starts
+                    smoothJoins(out.pts, out.starts); mapView.planPts = out.pts; mapView.planLift = out.lift; mapView.planEdgePt = out.starts
                     val pins = ArrayList<MapView.Pin>()
                     pins.add(MapView.Pin(start!!.x, start.z, "S", Color.rgb(30, 150, 80)))
                     plan.stops.forEachIndexed { i, s -> pins.add(MapView.Pin(s.x, s.z, "${i + 1}", Color.rgb(25, 118, 210))) }
@@ -2163,7 +2218,7 @@ class MainActivity : Activity() {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         }
         val scaleEdit = EditText(this).apply {
-            hint = "Sim distance scale (game shows map x19)"
+            hint = "Sim distance scale for ${Games.current.short} (game shows map x${Games.current.scale.toInt()})"
             setText(simScale.toString()); setSingleLine()
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
         }

@@ -52,6 +52,7 @@ class TruckState(
     val navEtaMin: Float, // the game's own ETA to its navigation target in game minutes, -1 unknown
     val gameTimeMin: Float, // in-game clock as minutes since day 1 00:00 (day 1 is a Monday), -1 unknown
     val detail: Detail? = null,
+    val gameName: String = "", // "ETS2" or "ATS" (the server's game.gameName)
     val onJob: Boolean = false, val jobDelivered: Boolean = false, val jobCancelled: Boolean = false, val jobFinished: Boolean = false, // the server's gameplay section
 )
 
@@ -171,6 +172,7 @@ class TelemetryClient(
                 ),
                 navEtaMin = restMinutes(nav?.optString("estimatedTime", "") ?: ""),
                 gameTimeMin = clockMinutes(str(game, "time")),
+                gameName = str(game, "gameName"),
                 onJob = gp?.optBoolean("onJob", false) ?: false, jobDelivered = gp?.optBoolean("jobDelivered", false) ?: false,
                 jobCancelled = gp?.optBoolean("jobCancelled", false) ?: false, jobFinished = gp?.optBoolean("jobFinished", false) ?: false,
                 detail = run {

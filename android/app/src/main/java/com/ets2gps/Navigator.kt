@@ -511,26 +511,9 @@ class Navigator(private val map: MapData, private val router: Router) {
         7 -> "seventh"; 8 -> "eighth"; else -> "${n}th"
     }
 
-    fun spokenDistance(worldM: Float): String {
-        val m = worldM * distScale
-        return when {
-            m < 950f -> "${max(50, (m / 50f).roundToInt() * 50)} meters"
-            m < 10000f -> {
-                val half = (m / 500f).roundToInt() / 2f
-                if (half == half.toInt().toFloat()) "${half.toInt()} kilometers" else "$half kilometers"
-            }
-            else -> "${(m / 1000f).roundToInt()} kilometers"
-        }
-    }
+    fun spokenDistance(worldM: Float): String = Units.spoken(worldM * distScale)
 
-    fun shortDistance(worldM: Float): String {
-        val m = worldM * distScale
-        return when {
-            m < 1000f -> "${max(10, (m / 10f).roundToInt() * 10)} m"
-            m < 10000f -> String.format(java.util.Locale.US, "%.1f km", m / 1000f)
-            else -> "${(m / 1000f).roundToInt()} km"
-        }
-    }
+    fun shortDistance(worldM: Float): String = Units.short(worldM * distScale)
 
     companion object {
         const val OFF_ROUTE_M = 45f

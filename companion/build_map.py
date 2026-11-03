@@ -396,7 +396,7 @@ def build(fs, out_path):
         sn, en = nodes.get(su), nodes.get(eu)
         if not sn or not en:
             continue
-        left, right, off, dl, dr, side, grade = defs.roadlooks[look]
+        left, right, off, dl, dr, side, grade, track = defs.roadlooks[look]
         if dl + dr == 0:
             continue  # rails, trams, pedestrian-only
         total = left + right
@@ -407,7 +407,7 @@ def build(fs, out_path):
         wq = min(255, int(max(width, 4.5) * 4))
         dt = dl + dr
         cls = 2 if dt >= 6 else 1 if dt >= 4 else 0
-        speed = (110, 90, 60)[2 - cls] if cls else 50
+        speed = 30 if track else (110, 90, 60)[2 - cls] if cls else 50
         fwd, bwd = dr > 0, dl > 0
         if fwd != bwd and side:  # one-way: template side decides the direction
             fwd, bwd = side == "R", side == "L"

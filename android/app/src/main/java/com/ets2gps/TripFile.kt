@@ -33,7 +33,7 @@ object TripFile {
             .put("start", pt(t.start)).put("stops", JSONArray().also { a -> t.stops.forEach { a.put(pt(it)) } })
             .put("dest", pt(t.dest)).put("lengthM", Math.round(t.lengthM.toDouble())))
         return JSONObject().put("format", FORMAT).put("version", VERSION)
-            .put("note", "ETS2 GPS trip file. Positions are map coordinates: they fit the same map (game and ProMods versions) they were made on.")
+            .put("note", "ETS2-ATS GPS trip file. Positions are map coordinates: they fit the same map (game and ProMods versions) they were made on.")
             .put("trips", arr).toString(2)
     }
 
@@ -56,9 +56,9 @@ object TripFile {
     fun parse(text: String): Result {
         fun fail(e: String) = Result(emptyList(), 0, e)
         if (text.length > MAX_CHARS) return fail("That file is too big to be a trip file")
-        val root = try { JSONObject(text) } catch (_: JSONException) { return fail("This is not an ETS2 GPS trip file") }
-        if (root.optString("format") != FORMAT) return fail("This is not an ETS2 GPS trip file")
-        if (root.optInt("version", 1) > VERSION) return fail("This trip file is from a newer version of ETS2 GPS - update the app")
+        val root = try { JSONObject(text) } catch (_: JSONException) { return fail("This is not an ETS2-ATS GPS trip file") }
+        if (root.optString("format") != FORMAT) return fail("This is not an ETS2-ATS GPS trip file")
+        if (root.optInt("version", 1) > VERSION) return fail("This trip file is from a newer version of ETS2-ATS GPS - update the app")
         val arr = root.optJSONArray("trips") ?: return fail("The file contains no trips")
         val out = ArrayList<TripData>(); var skipped = 0
         for (i in 0 until arr.length()) {

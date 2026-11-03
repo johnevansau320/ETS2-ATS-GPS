@@ -235,7 +235,7 @@ class MapData(
             val b = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN)
             val magic = ByteArray(4)
             b.get(magic)
-            require(String(magic) == "ETSM") { "not an ETS2 GPS map file" }
+            require(String(magic) == "ETSM") { "not an ETS2-ATS GPS map file" }
             val ver = b.short.toInt()
             require(ver in 2..10) { "unsupported map version $ver (update the app or rebuild the map)" }
             b.short

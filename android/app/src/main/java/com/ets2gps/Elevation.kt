@@ -79,7 +79,7 @@ class ElevationChart(ctx: Context, private val log: ElevationLog, private val di
         for (k in 0..3) {
             val y = t + (b - t) * k / 3f
             c.drawLine(l, y, r, y, grid)
-            c.drawText("%.0f m".format(hi - (hi - lo) * k / 3f), l - 4f * d, y + 4f * d, txt)
+            c.drawText(Units.altText(hi - (hi - lo) * k / 3f), l - 4f * d, y + 4f * d, txt)
         }
         path.reset()
         path.moveTo(px(0), b)
@@ -93,6 +93,6 @@ class ElevationChart(ctx: Context, private val log: ElevationLog, private val di
         txt.textAlign = Paint.Align.LEFT
         c.drawText("start", l, height - 6f * d, txt)
         txt.textAlign = Paint.Align.RIGHT
-        c.drawText("%.0f km%s".format((d1 - d0) * distScale / 1000f, if (distScale == 1f) "" else " (game)") + " travelled", r, height - 6f * d, txt)
+        c.drawText(Units.longText((d1 - d0) * distScale / 1000f) + (if (distScale == 1f) "" else " (game)") + " travelled", r, height - 6f * d, txt)
     }
 }
