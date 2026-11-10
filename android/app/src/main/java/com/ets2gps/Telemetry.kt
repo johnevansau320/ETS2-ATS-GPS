@@ -54,7 +54,19 @@ class TruckState(
     val detail: Detail? = null,
     val gameName: String = "", // "ETS2" or "ATS" (the server's game.gameName)
     val onJob: Boolean = false, val jobDelivered: Boolean = false, val jobCancelled: Boolean = false, val jobFinished: Boolean = false, // the server's gameplay section
+    val selected: SelectedJob? = null, // a job taken but not started (driving to the pickup)
 )
+
+/**
+ * A job taken but not started yet (Freight Market: the trailer still waits at the pickup). The game's job channels stay empty until the trailer is
+ * hooked up; the TruckSim GPS server (version 7 and later) reports the selection as "selectedJob". Ids only - names come from the map.
+ */
+class SelectedJob(
+    val cargoId: String, val srcCityId: String, val srcCompanyId: String, val destCityId: String, val destCompanyId: String,
+    val plannedKm: Int, val units: Int,
+) {
+    val key get() = "$srcCompanyId/$srcCityId>$destCompanyId/$destCityId:$cargoId"
+}
 
 /**
  * Polls the TruckSim GPS Telemetry Server (http://<pc>:31377/api/ets2/telemetry).
@@ -175,6 +187,13 @@ class TelemetryClient(
                 gameName = str(game, "gameName"),
                 onJob = gp?.optBoolean("onJob", false) ?: false, jobDelivered = gp?.optBoolean("jobDelivered", false) ?: false,
                 jobCancelled = gp?.optBoolean("jobCancelled", false) ?: false, jobFinished = gp?.optBoolean("jobFinished", false) ?: false,
+                selected = j.optJSONObject("selectedJob")?.takeIf { str(job, "destinationCityId").isEmpty() && str(it, "sourceCityId").isNotEmpty() }?.let { sj ->
+                    SelectedJob(
+                        cargoId = str(sj, "cargoId"), srcCityId = str(sj, "sourceCityId"), srcCompanyId = str(sj, "sourceCompanyId"),
+                        destCityId = str(sj, "destinationCityId"), destCompanyId = str(sj, "destinationCompanyId"),
+                        plannedKm = sj.optInt("plannedDistanceKm", 0), units = sj.optInt("unitCount", 1),
+                    )
+                },
                 detail = run {
                     val tr = trailers?.optJSONObject(0)
                     Detail(

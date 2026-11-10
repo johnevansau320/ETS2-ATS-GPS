@@ -221,6 +221,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         Games.current = Games.byId(prefs.getString("game", "ets2"))
+        Units.choice = prefs.getString("units", "game") ?: "game"
         buildUi()
         voice = Voice(this)
         voice.enabled = prefs.getBoolean("voice", true)
@@ -764,7 +765,7 @@ class MainActivity : Activity() {
         val tg = Games.fromName(s.gameName)
         if (s.connected && tg != null && tg != Games.current) { switchGame(tg); return }
         truck = s
-        banner.setJob(s.job, if (nav?.active == true && routeEtaGameMin >= 0) routeEtaGameMin else s.navEtaMin)
+        banner.setJob(s.job ?: s.selected?.let { pickupBannerJob(it) }, if (nav?.active == true && routeEtaGameMin >= 0) routeEtaGameMin else s.navEtaMin)
         val now = SystemClock.elapsedRealtime()
         motion.update(s, now)
         mapView.hasFix = s.connected && (s.x != 0f || s.z != 0f)
@@ -1026,9 +1027,44 @@ class MainActivity : Activity() {
         val t = truck
         if (m == null) { toast("Map not loaded yet"); return }
         if (t == null || !t.connected) { toast("Start the game first - no telemetry yet"); return }
-        if (t.destCityId.isEmpty() && t.destCity.isEmpty()) { toast("The game reports no active job"); return }
+        if (t.destCityId.isEmpty() && t.destCity.isEmpty()) {
+            val sel = t.selected
+            if (sel != null) { navigateToPickup(sel, m); return }
+            toast("The game reports no active job"); return
+        }
         navigateToJob(t, m)
     }
+
+    // ---- a job taken but not started: the drive to the pickup
+    private var pickupDest = "" // destName of the route to a selected job's pickup: replaced by the delivery route when the trailer is hooked up
+
+    private fun navigateToPickup(sel: SelectedJob, m: MapData) {
+        val name = "Pickup: " + place(companyLabel(sel.srcCompanyId), cityLabel(sel.srcCityId))
+        val co = m.findCompany(sel.srcCityId, sel.srcCompanyId)
+        if (co != null) {
+            val yard = m.findDrops(sel.srcCityId, sel.srcCompanyId)
+            computeRoute(yard?.gateX ?: co.x, yard?.gateZ ?: co.z, name, announce = true)
+        } else {
+            val c = m.findCity(sel.srcCityId)
+            if (c == null) { toast("The pickup '${sel.srcCityId}' is not on the loaded map"); return }
+            computeRoute(c.x, c.z, name, announce = true)
+        }
+        pickupDest = name
+    }
+
+    /** Names for a selected job's ids, from the map (the telemetry gives ids only). */
+    private fun prettyId(id: String) = if (id.isEmpty()) "" else id.substring(0, 1).uppercase() + id.substring(1).replace('_', ' ')
+    private fun cityLabel(id: String) = map?.findCity(id)?.name ?: prettyId(id)
+    private fun companyLabel(id: String) = map?.companyNames?.get(id.lowercase())?.takeIf { it.isNotEmpty() } ?: prettyId(id)
+    private fun place(company: String, city: String) = if (company.isNotEmpty()) "$company, $city" else city
+
+    /** The banner's job lines for a selected job: "Pickup: company, city -> company, city" and the cargo. */
+    private fun pickupBannerJob(sel: SelectedJob) = JobInfo(
+        srcCity = cityLabel(sel.srcCityId), srcCompany = "Pickup: " + companyLabel(sel.srcCompanyId),
+        destCity = cityLabel(sel.destCityId), destCompany = companyLabel(sel.destCompanyId),
+        cargo = prettyId(sel.cargoId) + (if (sel.plannedKm > 0) "  \u00b7  " + Units.longText(sel.plannedKm.toFloat()) else "") + "  \u00b7  Hook up the trailer to start the job",
+        massKg = 0f, income = 0L, dueMin = -1f, plannedKm = sel.plannedKm,
+    )
 
     /** Routes to the delivery company if it is on the map, otherwise to the destination city centre. */
     private fun navigateToJob(t: TruckState, m: MapData) {
@@ -1061,7 +1097,7 @@ class MainActivity : Activity() {
         val m = map ?: return
         val t = truck ?: return
         val h = host.substringBefore(":")
-        if (!followGameGps || h.isEmpty() || gameGpsBusy || now - gameGpsCheckMs < 5000L || t.destCityId.isNotEmpty()) return
+        if (!followGameGps || h.isEmpty() || gameGpsBusy || now - gameGpsCheckMs < 5000L || t.destCityId.isNotEmpty() || t.selected != null) return
         gameGpsCheckMs = now
         gameGpsBusy = true
         Thread {
@@ -1153,11 +1189,33 @@ class MainActivity : Activity() {
 
     private fun checkNewJob(t: TruckState) {
         val m = map ?: return
-        val key = if (t.destCityId.isEmpty()) "" else "${t.destCityId}/${t.destCompanyId}"
+        val sel = t.selected
+        val key = if (t.destCityId.isNotEmpty()) "${t.destCityId}/${t.destCompanyId}" else if (sel != null) "sel:" + sel.key else ""
         if (key == lastJobKey) return
         lastJobKey = key
-        if (key.isNotEmpty()) resetTrip()
-        if (key.isEmpty() || jobDialog?.isShowing == true) return
+        if (key.isEmpty()) return
+        if (sel != null) {
+            // a job was taken in the job market: offer the drive to the pickup straight away
+            if (jobDialog?.isShowing == true) jobDialog?.dismiss()
+            val pickup = place(companyLabel(sel.srcCompanyId), cityLabel(sel.srcCityId))
+            jobDialog = AlertDialog.Builder(this)
+                .setTitle("New job")
+                .setMessage(prettyId(sel.cargoId) + ": " + cityLabel(sel.srcCityId) + " to " + cityLabel(sel.destCityId) +
+                    (if (sel.plannedKm > 0) " (" + Units.longText(sel.plannedKm.toFloat()) + ")" else "") + ".\n\nNavigate to the pickup at $pickup?")
+                .setPositiveButton("Navigate") { _, _ -> navigateToPickup(sel, m) }
+                .setNegativeButton("Not now", null)
+                .show()
+            return
+        }
+        resetTrip()
+        if (hasDest && pickupDest.isNotEmpty() && destName == pickupDest) {
+            // the trailer is hooked up at the pickup we routed to: carry on to the delivery without asking
+            pickupDest = ""
+            if (jobDialog?.isShowing == true) jobDialog?.dismiss()
+            navigateToJob(t, m)
+            return
+        }
+        if (jobDialog?.isShowing == true) return
         val name = if (t.destCompany.isNotEmpty()) "${t.destCompany}, ${t.destCity}" else t.destCity
         jobDialog = AlertDialog.Builder(this)
             .setTitle("New job")
@@ -1312,7 +1370,17 @@ class MainActivity : Activity() {
             }
             cards.add(TripCard("JOB", rows, bar, Color.rgb(90, 190, 255), note))
         } else {
-            cards.add(TripCard("JOB", listOf(TripRow("Status", "no active job"))))
+            val sel = s.selected
+            if (sel != null) {
+                val rows = arrayListOf(
+                    TripRow("Status", "waiting at the pickup"),
+                    TripRow("From", place(companyLabel(sel.srcCompanyId), cityLabel(sel.srcCityId))),
+                    TripRow("To", place(companyLabel(sel.destCompanyId), cityLabel(sel.destCityId))),
+                    TripRow("Cargo", prettyId(sel.cargoId)),
+                )
+                if (sel.plannedKm > 0) rows.add(TripRow("Planned distance", Units.longText(sel.plannedKm.toFloat())))
+                cards.add(TripCard("JOB", rows))
+            } else cards.add(TripCard("JOB", listOf(TripRow("Status", "no active job"))))
         }
 
         // ROUTE
@@ -2251,6 +2319,13 @@ class MainActivity : Activity() {
             toast("Voice status: ${voice.status}")
             voice.test()
         }
+        val unitIds = arrayOf("game", "metric", "imperial")
+        val unitGroup = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
+        val unitText = arrayOf("Same as the game (kilometres in ETS2, miles in ATS)", "Metric: km, km/h, metres, litres, tonnes", "Imperial: miles, mph, feet, gallons, pounds")
+        for ((i, t) in unitText.withIndex()) unitGroup.addView(RadioButton(this).apply { text = t; id = 3000 + i; isChecked = (Units.choice == unitIds[i]) })
+        if (unitGroup.checkedRadioButtonId == -1) unitGroup.check(3000)
+        box.addView(TextView(this).apply { text = "Units"; textSize = 14f; setTypeface(typeface, Typeface.BOLD) })
+        box.addView(unitGroup)
         box.addView(TextView(this).apply { text = "Route type"; textSize = 14f; setTypeface(typeface, Typeface.BOLD) })
         box.addView(modeGroup)
         val ferryBox = CheckBox(this).apply { text = "Avoid ferries and car trains (some places may become unreachable)"; isChecked = avoidFerries }
@@ -2284,6 +2359,12 @@ class MainActivity : Activity() {
             val sc = scaleEdit.text.toString().toFloatOrNull()
             if (sc != null && sc > 0f) simScale = sc
             realDist = realBox.isChecked
+            val un = unitIds.getOrNull(unitGroup.checkedRadioButtonId - 3000)
+            if (un != null && un != Units.choice) {
+                Units.choice = un; prefs.edit().putString("units", un).apply()
+                speedUnitText.text = Units.speedUnit
+                truck?.let { onTruck(it) }
+            }
             showLanes = laneBox.isChecked; if (!showLanes) setLaneUi(null)
             followGameGps = gameGpsBox.isChecked
             checkUpdates = updBox.isChecked

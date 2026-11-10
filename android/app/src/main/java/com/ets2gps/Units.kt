@@ -33,7 +33,9 @@ object Units {
     private const val M_PER_FOOT = 0.3048f
     private const val L_PER_GALLON = 3.785411784f
     private val us = Locale.US
-    val imperial get() = Games.current.imperial
+    /** The user's choice in Settings: "game" (km in ETS2, miles in ATS), "metric" or "imperial". */
+    var choice = "game"
+    val imperial get() = choice == "imperial" || (choice != "metric" && Games.current.imperial)
     val speedUnit get() = if (imperial) "mph" else "km/h"
     val distUnit get() = if (imperial) "mi" else "km"
     val money get() = Games.current.currency

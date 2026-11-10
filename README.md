@@ -52,6 +52,7 @@ Pinch / +/- to zoom, double-tap resets zoom.
 
 ## Extras
 
+- **Jobs before pickup and units** (v1.14.0, with the Windows app v1.12.0): a Freight Market job is seen as soon as you take it. The app offers the drive to the pickup, shows *Pickup: ... → ...* until the trailer is hooked up, then switches to the delivery route by itself. *Settings > Units* chooses *Same as the game*, *Metric* or *Imperial* in either game.
 - **American Truck Simulator** (v1.13.0, with the Windows app v1.11.0): the app sees which game is running and switches by itself, loading that game's map from the PC (the Windows app builds the ATS map from your ATS install). In ATS it shows mph, miles, gallons, US speed-limit signs and Interstate / US / state road shields, with the game clock at 1:20; trips, avoided roads and the distance scale are kept separately per game. Gravel and farm roads the game's GPS uses are on the map, company yards have the game's shapes, and the route line is smoothed where road pieces join. The repositories were renamed to `ETS2-ATS-GPS` and `ETS2-ATS-GPS-Win`.
 
 - **Roundabouts where traffic drives on the left** (v1.12.2, with the Windows app v1.10.1): in the UK, Ireland, Malta, Cyprus, the Isle of Man and the Channel Islands roundabout exits are counted clockwise, so the spoken exit and the number in the turn picture match the route.
