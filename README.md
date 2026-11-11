@@ -157,6 +157,10 @@ Map parsing is a Python port of the file-format knowledge in the MIT-licensed
 [ts-map](https://github.com/dariowouters/ts-map) project.
 
 
+## Support
+
+These apps are free and stay free. If they've made your hauls better and you'd like to say thanks, you can [buy me a coffee](https://buymeacoffee.com/johnevansau320). More apps and mods: [johnevansau.com](https://johnevansau.com).
+
 ## License
 
 MIT - see [LICENSE](LICENSE). ETS2 / Euro Truck Simulator 2 is a trademark of SCS Software; this project is not affiliated with or endorsed by SCS Software. No game data is distributed: the map is built locally from your own installation.
